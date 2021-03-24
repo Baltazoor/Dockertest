@@ -1,9 +1,63 @@
-FROM node:14-alpine AS build
-RUN apk --no-cache add git openssh-client python make g++
-RUN mkdir /app
+FROM ubuntu:16.04 AS base
+
+ARG ENVIRONMENT=staging
+ENV RAILS_ENV=${ENVIRONMENT}
+
+ARG DEBUG_ASSETS=false
+ENV DEBUG_ASSETS=${DEBUG_ASSETS}}
+
+ENV RUBY_VERSION 2.6
+ENV DEBIAN_FRONTEND=noninteractive
+
+ENV GEM_HOME /usr/local/bundle
+ENV BUNDLE_PATH="$GEM_HOME" \
+  BUNDLE_SILENCE_ROOT_WARNING=1 \
+  BUNDLE_APP_CONFIG="$GEM_HOME"
+
+ENV PATH $PATH:${GEM_HOME}/bin
+
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
+  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu xenial main > /etc/apt/sources.list.d/brightbox-ruby-ng-xenial.list && \
+  apt-get update -q && \
+  apt-get -y install postgresql postgresql-contrib libpq-dev && \
+  apt-get install -yq --no-install-recommends ca-certificates curl && \
+  curl -sL https://deb.nodesource.com/setup_14.x | bash - && \
+  apt-get install -yq --no-install-recommends \
+    unixodbc-dev \
+    libmysqlclient-dev \
+    build-essential \
+    libxrender1 \
+    nodejs \
+    openssl \
+    ruby$RUBY_VERSION \
+    wget \
+    tzdata \
+    libcurl4-openssl-dev \
+    libsqlite3-dev && \
+  rm -rf /var/lib/apt/lists/* && \
+  truncate -s 0 /var/log/*log && \
+  echo 'gem: --no-document' > /etc/gemrc && \
+  gem install bundler && gem update --system
+
 WORKDIR /app
 
-COPY package*.json .npmrc /app/
+
+FROM base AS build
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
+  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu xenial main > /etc/apt/sources.list.d/brightbox-ruby-ng-xenial.list && \
+  apt-get update -q && \
+  apt-get install -yq --no-install-recommends \
+    libssl-dev \
+    g++ \
+    gcc \
+    ssh \
+    git \
+    libc6-dev \
+    make \
+    patch \
+    ruby$RUBY_VERSION-dev && \
+  rm -rf /var/lib/apt/lists/* && \
+  truncate -s 0 /var/log/*log
 
 # Setup git
 ARG GIT_SSH_KEY
@@ -13,21 +67,35 @@ RUN chmod 0400 /root/.ssh/id_rsa
 RUN touch /root/.ssh/known_hosts
 RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
+ADD Gemfile* /app/
+
+RUN bundle install -j3 --without development test && \
+  rm -rf ${GEM_HOME}/cache/*.gem && \
+  find ${GEM_HOME} -name "*.c" -delete && \
+  find ${GEM_HOME} -name "*.o" -delete && \
+  find ${GEM_HOME} -name "*_x86" -delete
+
+ADD . /app
+
 # Setup NPM
 ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-RUN cat .npmrc
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> react/.npmrc
 
-COPY package.json package-lock.json /app/
-RUN npm ci
-COPY . /app/
-RUN npm run build:client:release
+RUN bundle exec rake assets:precompile && \
+  rm -rf tmp/* react/node_modules
 
-FROM node:14-alpine
-RUN apk add make
 
+FROM base
+
+# Inspired by: https://gist.github.com/anonoz/b56e4e32b8c9252a3085fae74b78a7c8
 COPY --from=build /app /app
+COPY --from=build /usr/local/bundle /usr/local/bundle
 
-WORKDIR /app
+RUN mkdir -p ./shared/pids/ ./shared/log/ ./shared/sockets/ && \
+  chmod -R 666 ./shared/
 
-CMD ["make", "server"]
+RUN ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stderr.log && \
+  ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stdout.log
+
+COPY ./infra/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
