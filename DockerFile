@@ -1,30 +1,53 @@
-FROM python:3.6-slim
+FROM ruby:2.6.2-slim
 
-ENV RASA_NLU_DOCKER="YES" \
-    RASA_NLU_HOME=/app \
-    RASA_NLU_PYTHON_PACKAGES=/usr/local/lib/python3.6/dist-packages
+ENV DEBIAN_FRONTEND noninteractive
+# https://github.com/debuerreotype/docker-debian-artifacts/issues/66#issuecomment-476616579
+RUN sed -i '/jessie-updates/d' /etc/apt/sources.list  # Now archived
 
-# Run updates, install basics and cleanup
-# - build-essential: Compile specific dependencies
-# - git-core: Checkout git repos
-RUN apt-get update -qq \
-    && apt-get install -y --no-install-recommends build-essential git-core \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# mkdir due to: https://github.com/dalibo/temboard/commit/ff98d6740ae11345658508b02052294d6cffd448
+RUN apt-get update -q && \
+    mkdir -p /usr/share/man/man1 && \
+    mkdir -p /usr/share/man/man7 && \
+    apt-get -y install postgresql postgresql-contrib libpq-dev && \
+    apt-get install -y unixodbc-dev unixodbc default-libmysqlclient-dev build-essential libcurl4-openssl-dev curl python \
+    libssl-dev php7.0 php7.0-mcrypt python-pip
 
-WORKDIR ${RASA_NLU_HOME}
+RUN pip install -U niet
 
-COPY . ${RASA_NLU_HOME}
+# Install gcloud
+RUN curl https://dl.google.com/dl/cloudsdk/release/google-cloud-sdk.tar.gz > /tmp/google-cloud-sdk.tar.gz
+RUN curl https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem > /tmp/rds-combined-ca-bundle.pem
 
-RUN pip install -r alt_requirements/requirements_tensorflow_sklearn.txt
+RUN mkdir -p /usr/local/gcloud \
+  && tar -C /usr/local/gcloud -xvf /tmp/google-cloud-sdk.tar.gz \
+  && /usr/local/gcloud/google-cloud-sdk/install.sh
 
-RUN pip install -e .
+ENV PATH $PATH:/usr/local/gcloud/google-cloud-sdk/bin
 
-COPY config/config.yml ${RASA_NLU_HOME}/config.yml
+WORKDIR /build
 
-VOLUME ["/app/projects", "/app/logs", "/app/data"]
+COPY snowflake-odbc-2.22.5.x86_64.deb ./
+RUN dpkg -i snowflake-odbc-2.22.5.x86_64.deb
 
-EXPOSE 5000
+RUN sed -i 's/SF_ACCOUNT/tq01613.us-east-1/' /etc/odbc.ini
 
-ENTRYPOINT ["./entrypoint.sh"]
-CMD ["start", "-c", "/app/config/config.yml", "--path", "/app/projects"]
+RUN mkdir /app
+WORKDIR /app
+
+COPY Gemfile Gemfile.lock ./
+RUN gem install bundler:2.0.2; bundle install --without=development
+
+COPY . /app
+RUN curl https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem > rds-combined-ca-bundle.pem
+
+ARG ENVIRONMENT=staging
+ENV STAGE=$ENVIRONMENT
+ENV ENVIRONMENT=$ENVIRONMENT
+ENV CONF_DIR=/app/conf
+RUN ln -sf /app/config/$ENVIRONMENT $CONF_DIR
+ENV GOOGLE_APPLICATION_CREDENTIALS=$CONF_DIR/bigquery.json
+ENV BOTO_CONFIG=$CONF_DIR/boto
+
+RUN gcloud config set project `niet $STAGE.project_id /app/config/bigquery.yml`
+
+CMD ["bundle", "exec", "rackup", "--host", "0.0.0.0", "-p", "2600"]
