@@ -1,27 +1,30 @@
-FROM rasa/rasa:1.2.7-full
-#FROM python:3.7
+FROM python:3.6-slim
 
-EXPOSE 5005
+ENV RASA_NLU_DOCKER="YES" \
+    RASA_NLU_HOME=/app \
+    RASA_NLU_PYTHON_PACKAGES=/usr/local/lib/python3.6/dist-packages
 
-# we cannot write to the exisiting /app dir (dvc commands fail silently), so we create myapp to run dvc in it
+# Run updates, install basics and cleanup
+# - build-essential: Compile specific dependencies
+# - git-core: Checkout git repos
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends build-essential git-core \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN mkdir /myapp
-WORKDIR /myapp
+WORKDIR ${RASA_NLU_HOME}
 
-COPY requirements.txt /requirements.txt
-RUN pip install -r /requirements.txt
+COPY . ${RASA_NLU_HOME}
 
-COPY models-assessment /myapp/models-assessment
-COPY models-production /myapp/models-production
-COPY .dvc /myapp/.dvc
+RUN pip install -r alt_requirements/requirements_tensorflow_sklearn.txt
 
-RUN dvc config core.no_scm true
+RUN pip install -e .
 
-RUN dvc pull -r dvc-proxy models-assessment/*dvc
-RUN dvc pull -r dvc-proxy models-production/*dvc
+COPY config/config.yml ${RASA_NLU_HOME}/config.yml
 
-WORKDIR /app
-COPY entrypoint.sh /app
-COPY run_rasa.py /app
+VOLUME ["/app/projects", "/app/logs", "/app/data"]
+
+EXPOSE 5000
 
 ENTRYPOINT ["./entrypoint.sh"]
+CMD ["start", "-c", "/app/config/config.yml", "--path", "/app/projects"]
