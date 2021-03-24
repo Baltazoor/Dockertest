@@ -1,32 +1,20 @@
-FROM node:13-alpine AS build
-RUN apk --no-cache add git openssh-client python make
-RUN mkdir /app
-WORKDIR /app
+# lock to some node version
+FROM node:12.13.1-alpine
 
-COPY package*.json .npmrc /app/
+# set env variables
+ARG ENVIRONMENT=staging
+ENV NODE_ENV=${ENVIRONMENT}
 
-# Setup git
-ARG GIT_SSH_KEY
-RUN mkdir /root/.ssh/
-RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
-RUN chmod 0400 /root/.ssh/id_rsa
-RUN touch /root/.ssh/known_hosts
-RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+# copy project files
+COPY . ./
 
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
+# install NPM packages
+RUN npm install --only=prod
 
-COPY package.json package-lock.json /app/
-RUN npm ci --production
-COPY . /app/
+# install NestJS CLI for build
+RUN npm install -g @nestjs/cli
 
-FROM node:13-alpine
-RUN apk add make
+# build JS bundles
+RUN npm run build
 
-COPY --from=build /app /app
-
-WORKDIR /app
-
-CMD ["make", "server"]
-
+CMD ["node", "dist/main.js"]
