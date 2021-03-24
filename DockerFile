@@ -3,15 +3,10 @@ RUN apk add git python make
 RUN mkdir /app
 WORKDIR /app
 
-COPY package*.json .npmrc /app/
-
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-
+COPY package*.json /app/
 RUN npm i
 
-FROM node:latest
+FROM node:10.11-alpine
 
 COPY --from=build /app /app
 COPY . /app/
