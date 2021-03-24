@@ -1,8 +1,12 @@
-FROM node:14-alpine AS build
-RUN apk --no-cache add git openssh-client python make
+FROM node:14.1-alpine AS base
+RUN apk add make openjdk8
+ENV JAVA_HOME=/usr/lib/jvm/java-1.8-openjdk
+ENV PATH="$JAVA_HOME/bin:${PATH}"
+
+FROM base AS build
+RUN apk --no-cache add git openssh-client python g++
 RUN mkdir /app
 WORKDIR /app
-
 COPY package*.json .npmrc /app/
 
 # Setup git
@@ -17,15 +21,15 @@ RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 ARG GITHUB_NPM_TOKEN
 RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
 
-COPY package.json package-lock.json /app/
+# Build
 RUN npm ci --production
+RUN cp -r /app/node_modules /prod_node_modules
+RUN npm ci
 COPY . /app/
+RUN npm run build:client:release
 
-FROM node:14-alpine
-RUN apk add make
-
+FROM base
 COPY --from=build /app /app
-
 WORKDIR /app
 
 CMD ["make", "server"]
