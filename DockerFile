@@ -1,32 +1,25 @@
-FROM node:14-alpine AS build
-RUN apk --no-cache add git openssh-client python make g++
+FROM lemonadehq/numpy_pandas:v3
+
 RUN mkdir /app
 WORKDIR /app
-
-COPY package*.json .npmrc /app/
 
 # Setup git
 ARG GIT_SSH_KEY
 RUN mkdir /root/.ssh/
 RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
 RUN chmod 0400 /root/.ssh/id_rsa
+
 RUN touch /root/.ssh/known_hosts
 RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-RUN cat .npmrc
+COPY requirements.in /requirements.in
+RUN pip install -r /requirements.in
+RUN pip check
 
-COPY package.json package-lock.json /app/
-RUN npm ci --production
-COPY . /app/
+COPY . /app
 
-FROM node:14-alpine
-RUN apk add make
+RUN wget https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem
 
-COPY --from=build /app /app
+ENV GUNICORN_WORKERS 1
 
-WORKDIR /app
-
-CMD ["make", "server"]
+CMD ["make", "run-api"]
