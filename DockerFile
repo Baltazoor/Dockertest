@@ -1,40 +1,7 @@
-FROM node:14-alpine
-RUN apk --no-cache add git openssh-client python make g++
-RUN mkdir /app
+FROM node:10.11-alpine
+RUN apk --no-cache add git python openssh-client make
+RUN npm i -g nodemon
+RUN mkdir -p ~/.ssh && (ssh-keyscan github.com >> ~/.ssh/known_hosts) && more ~/.ssh/known_hosts
 WORKDIR /app
-
-COPY package*.json .npmrc /app/
-
-ARG ENVIRONMENT=staging
-ENV STAGE=${ENVIRONMENT}
-
-ARG ENV_ID=master
-ENV ENV_ID=${ENV_ID}
-
-# Setup git
-ARG GIT_SSH_KEY
-RUN mkdir /root/.ssh/
-RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
-RUN chmod 0400 /root/.ssh/id_rsa
-RUN touch /root/.ssh/known_hosts
-RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
-
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-
-# Build
-RUN npm i
-COPY . /app/
-RUN npm run build:release
-
-CMD ["make", "server"]
-
-RUN mkdir -p ./shared/pids/ ./shared/log/ ./shared/sockets/ && \
-  chmod -R 666 ./shared/
-
-RUN ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stderr.log && \
-  ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stdout.log
-
-COPY ./infra/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+VOLUME /app/node_modules
+CMD nodemon -w "package.json" -x "npm i && node app.js --watch"
