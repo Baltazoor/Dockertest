@@ -1,11 +1,10 @@
-FROM node:13-alpine AS build
-RUN apk --no-cache add git openssh-client python make
-RUN mkdir /app
+FROM tiangolo/uvicorn-gunicorn:python3.7 AS builder
+
+RUN apt-get update && apt-get install -y build-essential \
+    libpoppler-cpp-dev pkg-config python-dev poppler-utils texlive texlive-extra-utils
+
 WORKDIR /app
 
-COPY package*.json .npmrc /app/
-
-# Setup git
 ARG GIT_SSH_KEY
 RUN mkdir /root/.ssh/
 RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
@@ -13,20 +12,32 @@ RUN chmod 0400 /root/.ssh/id_rsa
 RUN touch /root/.ssh/known_hosts
 RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-COPY package.json package-lock.json /app/
-RUN npm ci --production
-COPY . /app/
+COPY requirements.txt /requirements.txt
+RUN pip install -r /requirements.txt
 
-FROM node:13-alpine
-RUN apk add make
-RUN npm install -g ts-node-dev typescript
+COPY . /app
 
-COPY --from=build /app /app
+RUN dvc config core.no_scm true
+RUN dvc pull -r dvc-proxy
 
+
+
+FROM tiangolo/uvicorn-gunicorn:python3.7
 WORKDIR /app
 
-CMD ["make", "dev-server"]
+RUN apt-get update && apt-get install -y exiftool libpoppler-cpp-dev
+
+RUN rm -rf /app
+COPY --from=builder /app /app
+COPY --from=builder /opt/venv /opt/venv
+
+ENV PATH="/opt/venv/bin:$PATH"
+
+ENV APP_MODULE=run:app
+ENV PORT=6000
+ENV WEB_CONCURRENCY=4
+ENV ACCESS_LOG=""
+ENV GUNICORN_CMD_ARGS="--log-config infra/docker/gunicorn_logging.conf"
