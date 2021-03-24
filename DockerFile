@@ -1,42 +1,27 @@
-FROM python:3.7 AS builder
-WORKDIR /app
+FROM rasa/rasa:1.2.7-full
+#FROM python:3.7
 
-# authenticate git
-ARG GIT_SSH_KEY
-RUN mkdir /root/.ssh/
-RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
-RUN chmod 0400 /root/.ssh/id_rsa
-RUN touch /root/.ssh/known_hosts
-RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+EXPOSE 5005
 
-# create python venv
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# we cannot write to the exisiting /app dir (dvc commands fail silently), so we create myapp to run dvc in it
 
-# pip install main requirements
+RUN mkdir /myapp
+WORKDIR /myapp
+
 COPY requirements.txt /requirements.txt
 RUN pip install -r /requirements.txt
 
-# copy all dependencies
-COPY . /app
+COPY models-assessment /myapp/models-assessment
+COPY models-production /myapp/models-production
+COPY .dvc /myapp/.dvc
 
-FROM python:3.7
-ARG STAGE
+RUN dvc config core.no_scm true
+
+RUN dvc pull -r dvc-proxy models-assessment/*dvc
+RUN dvc pull -r dvc-proxy models-production/*dvc
 
 WORKDIR /app
+COPY entrypoint.sh /app
+COPY run_rasa.py /app
 
-# copy app and env
-COPY --from=builder /app /app
-COPY --from=builder /opt/venv /opt/venv
-# set python env
-ENV PATH="/opt/venv/bin:$PATH"
-
-# set env vars
-ARG GIT_HASH
-ARG GIT_BRANCH
-ARG SNOWFLAKE_SECRET_NAME
-ENV STAGE=$STAGE
-ENV GIT_HASH=$GIT_HASH
-ENV GIT_BRANCH=$GIT_BRANCH
-ENV SNOWFLAKE_SECRET_NAME=$SNOWFLAKE_SECRET_NAME
-ENV PYTHONPATH=/app
+ENTRYPOINT ["./entrypoint.sh"]
