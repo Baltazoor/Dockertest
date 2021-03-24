@@ -1,4 +1,4 @@
-FROM node:14.16-alpine AS build
+FROM node:14.1-alpine AS build
 RUN apk --no-cache add git openssh-client python make
 RUN mkdir /app
 WORKDIR /app
@@ -21,7 +21,7 @@ COPY package.json package-lock.json /app/
 RUN npm ci --production
 COPY . /app/
 
-FROM node:14.16-alpine
+FROM node:14.1-alpine
 RUN apk add make
 
 COPY --from=build /app /app
