@@ -1,5 +1,5 @@
-FROM node:14-alpine AS build
-RUN apk --no-cache add git openssh-client python make g++
+FROM node:13-alpine AS build
+RUN apk --no-cache add git openssh-client python make
 RUN mkdir /app
 WORKDIR /app
 
@@ -16,13 +16,40 @@ RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 # Setup NPM
 ARG GITHUB_NPM_TOKEN
 RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-RUN cat .npmrc
 
 COPY package.json package-lock.json /app/
 RUN npm ci --production
 COPY . /app/
 
-FROM node:14-alpine
+FROM node:13-alpine
+
+# Installs latest Chromium (63) package.
+RUN apk update && apk upgrade && \
+  echo @edge http://nl.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories && \
+  echo @edge http://nl.alpinelinux.org/alpine/edge/main >> /etc/apk/repositories && \
+  apk add --no-cache \
+  chromium@edge \
+  nss@edge \
+  make
+
+# Tell Puppeteer to skip installing Chrome. We'll be using the installed package.
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD true
+ENV PUPPETEER_EXECUTABLE_PATH '/usr/bin/chromium-browser'
+
 RUN apk add make
 
 COPY --from=build /app /app
+
+# Add user so we don't need --no-sandbox.
+RUN addgroup -S pptruser && adduser -S -g pptruser pptruser \
+  && mkdir -p /home/pptruser/Downloads \
+  && chown -R pptruser:pptruser /home/pptruser \
+  && chown -R pptruser:pptruser /app \
+  && chown -R pptruser:pptruser /tmp
+
+# Run everything after as non-privileged user.
+USER pptruser
+
+WORKDIR /app
+
+CMD ["make", "server"]
