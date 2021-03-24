@@ -1,20 +1,32 @@
-# lock to some node version
-FROM node:12.13.1-alpine
+FROM node:13-alpine AS build
+RUN apk --no-cache add git openssh-client python make
+RUN mkdir /app
+WORKDIR /app
 
-# set env variables
-ARG ENVIRONMENT=staging
-ENV NODE_ENV=${ENVIRONMENT}
+COPY package*.json .npmrc /app/
 
-# copy project files
-COPY . ./
+# Setup git
+ARG GIT_SSH_KEY
+RUN mkdir /root/.ssh/
+RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
+RUN chmod 0400 /root/.ssh/id_rsa
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-# install NPM packages
-RUN npm install --only=prod
+# Setup NPM
+ARG GITHUB_NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
 
-# install NestJS CLI for build
-RUN npm install -g @nestjs/cli
+COPY package.json package-lock.json /app/
+RUN npm ci --production
+COPY . /app/
 
-# build JS bundles
-RUN npm run build
+FROM node:13-alpine
+RUN apk add make
+RUN npm install -g ts-node-dev typescript
 
-CMD ["node", "dist/main.js"]
+COPY --from=build /app /app
+
+WORKDIR /app
+
+CMD ["make", "dev-server"]
