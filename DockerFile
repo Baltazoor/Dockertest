@@ -1,24 +1,28 @@
-FROM ruby:2.6.2-slim
-
-# https://github.com/debuerreotype/docker-debian-artifacts/issues/66#issuecomment-476616579
-RUN sed -i '/jessie-updates/d' /etc/apt/sources.list  # Now archived
-
-RUN apt-get update && apt-get install -y unixodbc-dev unixodbc default-libmysqlclient-dev build-essential libcurl4-openssl-dev git
-
-RUN mkdir /build
-WORKDIR /build
-
-COPY snowflake-odbc-2.17.6.x86_64.deb ./
-RUN dpkg -i snowflake-odbc-2.17.6.x86_64.deb
-
-RUN sed -i 's/SF_ACCOUNT/tq01613.us-east-1/' /etc/odbc.ini
-
+FROM node:14-alpine AS build
+RUN apk --no-cache add git openssh-client python make g++
 RUN mkdir /app
 WORKDIR /app
 
-COPY Gemfile Gemfile.lock ./
-RUN gem install bundler:2.0.2; bundle install --without=development
+COPY package*.json .npmrc /app/
 
-COPY . /app
+# Setup git
+ARG GIT_SSH_KEY
+RUN mkdir /root/.ssh/
+RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
+RUN chmod 0400 /root/.ssh/id_rsa
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-CMD ["bundle", "exec", "rackup", "--host", "0.0.0.0", "-p", "3000"]
+# Setup NPM
+ARG GITHUB_NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
+RUN cat .npmrc
+
+COPY package.json package-lock.json /app/
+RUN npm ci --production
+COPY . /app/
+
+FROM node:14-alpine
+RUN apk add make
+
+COPY --from=build /app /app
