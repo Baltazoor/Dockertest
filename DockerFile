@@ -1,10 +1,7 @@
-FROM tiangolo/uvicorn-gunicorn:python3.7 AS builder
-
-RUN apt-get update && apt-get install -y build-essential \
-    libpoppler-cpp-dev pkg-config python-dev poppler-utils texlive texlive-extra-utils
-
+FROM python:3.7 AS builder
 WORKDIR /app
 
+# authenticate git
 ARG GIT_SSH_KEY
 RUN mkdir /root/.ssh/
 RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
@@ -12,32 +9,34 @@ RUN chmod 0400 /root/.ssh/id_rsa
 RUN touch /root/.ssh/known_hosts
 RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
+# create python venv
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# pip install main requirements
 COPY requirements.txt /requirements.txt
 RUN pip install -r /requirements.txt
 
+# copy all dependencies
 COPY . /app
 
-RUN dvc config core.no_scm true
-RUN dvc pull -r dvc-proxy
+FROM python:3.7
+ARG STAGE
 
-
-
-FROM tiangolo/uvicorn-gunicorn:python3.7
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y exiftool libpoppler-cpp-dev
-
-RUN rm -rf /app
+# copy app and env
 COPY --from=builder /app /app
 COPY --from=builder /opt/venv /opt/venv
-
+# set python env
 ENV PATH="/opt/venv/bin:$PATH"
 
-ENV APP_MODULE=run:app
-ENV PORT=6000
-ENV WEB_CONCURRENCY=4
-ENV ACCESS_LOG=""
-ENV GUNICORN_CMD_ARGS="--log-config infra/docker/gunicorn_logging.conf"
+# set env vars
+ARG GIT_HASH
+ARG GIT_BRANCH
+ARG SNOWFLAKE_SECRET_NAME
+ENV STAGE=$STAGE
+ENV GIT_HASH=$GIT_HASH
+ENV GIT_BRANCH=$GIT_BRANCH
+ENV SNOWFLAKE_SECRET_NAME=$SNOWFLAKE_SECRET_NAME
+ENV PYTHONPATH=/app
