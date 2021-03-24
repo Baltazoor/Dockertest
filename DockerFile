@@ -1,16 +1,66 @@
-FROM node:12-alpine AS build
-RUN apk add git python make
-RUN mkdir /app
-WORKDIR /app
+ARG AWS_ACCOUNT_ID
+ARG RUBY_VERSION=2.4
+FROM ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/monolith-base:latest AS build
 
-COPY package*.json /app/
-RUN npm ci --production
+ENV GEM_HOME /usr/local/bundle
+ENV BUNDLE_PATH="$GEM_HOME" \
+  BUNDLE_SILENCE_ROOT_WARNING=1 \
+  BUNDLE_APP_CONFIG="$GEM_HOME"
 
-FROM node:12-alpine
+ENV PATH $PATH:${GEM_HOME}/bin
+
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
+  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
+  apt-get update -q && apt-get install -yq --no-install-recommends \
+  libssl-dev \
+  g++ \
+  gcc \
+  git \
+  libc6-dev \
+  make \
+  patch \
+  openssh-client \
+  ruby$RUBY_VERSION-dev && \
+  # clean up
+  rm -rf /var/lib/apt/lists/* && \
+  truncate -s 0 /var/log/*log
+
+ADD Gemfile* /app/
+
+RUN bundle install -j3 --without development test && \
+  rm -rf ${GEM_HOME}/cache/*.gem && \
+  find ${GEM_HOME} -name "*.c" -delete && \
+  find ${GEM_HOME} -name "*.o" -delete && \
+  find ${GEM_HOME} -name "*_x86" -delete
+
+ADD . /app
+
+# Setup git
+ARG GIT_SSH_KEY
+RUN mkdir /root/.ssh/
+RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
+RUN chmod 0400 /root/.ssh/id_rsa
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+# Setup NPM
+ARG GITHUB_NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> react/.npmrc
+
+RUN rake assets:precompile && \
+  rm -rf tmp/* react/node_modules
+
+# Build stage
+FROM ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/monolith-base:latest
 
 COPY --from=build /app /app
-COPY . /app/
+COPY --from=build /usr/local/bundle /usr/local/bundle
 
-WORKDIR /app
+RUN mkdir -p ./shared/pids/ ./shared/log/ ./shared/sockets/ \
+  && chmod -R 666 ./shared/
 
-CMD ["node", "app.js"]
+RUN ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stderr.log && \
+  ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stdout.log
+
+COPY ./infra/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
