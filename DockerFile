@@ -1,7 +1,33 @@
-FROM node:10.11-alpine
-RUN apk --no-cache add git python openssh-client make
-RUN npm i -g nodemon
-RUN mkdir -p ~/.ssh && (ssh-keyscan github.com >> ~/.ssh/known_hosts) && more ~/.ssh/known_hosts
+FROM ruby:2.6.5
+
+ENV DEBIAN_FRONTEND noninteractive
+
+# https://github.com/debuerreotype/docker-debian-artifacts/issues/66#issuecomment-476616579
+RUN sed -i '/jessie-updates/d' /etc/apt/sources.list  # Now archived
+
+RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+  apt-get update && \
+  apt-get install -y default-mysql-server default-mysql-client default-libmysqlclient-dev --no-install-recommends unixodbc unixodbc-dev && \
+  apt-get clean
+
+COPY snowflake-odbc-2.17.6.x86_64.deb ./
+RUN dpkg -i snowflake-odbc-2.17.6.x86_64.deb
+RUN sed -i 's/SF_ACCOUNT/tq01613.us-east-1/' /etc/odbc.ini
+
 WORKDIR /app
-VOLUME /app/node_modules
-CMD nodemon -w "package.json" -x "npm i && node app.js --watch"
+RUN mkdir -p ./shared/pids/ && \
+    mkdir -p ./shared/log/ && \
+    mkdir -p ./shared/sockets/ && \
+    chmod -R 666 ./shared/
+COPY . /app/
+
+RUN bundle && \
+  rake rails:update:bin && \
+  rm -f tmp/pids/server.pid
+
+RUN ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stderr.log && \
+    ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stdout.log
+
+COPY infra/docker/docker-entrypoint.sh /
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
