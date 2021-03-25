@@ -1,1 +1,31 @@
+FROM node:13.12-alpine as build
+RUN apk --no-cache add git openssh-client python make g++
+RUN mkdir /app
+WORKDIR /app
 
+ARG ENVIRONMENT=staging
+ENV STAGE=${ENVIRONMENT}
+ARG ENV_ID=master
+ENV ENV_ID=${ENV_ID}
+
+# Setup git
+ARG GIT_SSH_KEY
+RUN mkdir /root/.ssh/
+RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
+RUN chmod 0400 /root/.ssh/id_rsa
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+COPY . /app/
+
+# Setup NPM
+ARG GITHUB_NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
+
+RUN npm ci
+RUN npm run build
+
+FROM node:13-alpine
+COPY --from=build /app /app
+WORKDIR /app
+CMD ["node", "app.js"]
