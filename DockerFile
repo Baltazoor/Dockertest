@@ -1,21 +1,31 @@
-FROM node:14.16-alpine AS build
-RUN apk add git python make
+FROM node:14.1-alpine AS build
+RUN apk --no-cache add git openssh-client python make
 RUN mkdir /app
 WORKDIR /app
 
 COPY package*.json .npmrc /app/
 
+# Setup git
+ARG GIT_SSH_KEY
+RUN mkdir /root/.ssh/
+RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
+RUN chmod 0400 /root/.ssh/id_rsa
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+
 # Setup NPM
 ARG GITHUB_NPM_TOKEN
 RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
 
-RUN npm i
+COPY package.json package-lock.json /app/
+RUN npm ci --production
+COPY . /app/
 
-FROM node:14.16
+FROM node:14.1-alpine
+RUN apk add make
 
 COPY --from=build /app /app
-COPY . /app/
 
 WORKDIR /app
 
-CMD ["npm", "run", "storybook", "--", "--ci"]
+CMD ["make", "server"]
