@@ -1,31 +1,29 @@
-FROM node:13.14-alpine AS build
-RUN apk --no-cache add git openssh-client python make
-RUN mkdir /app
+FROM ruby:2.6.1
+
+ARG ENVIRONMENT=staging
+ENV RAILS_ENV=${ENVIRONMENT}
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN apt-get update && \
+  apt-get install -y curl && \
+  apt-get install -y mysql-server mysql-client unixodbc unixodbc-dev default-libmysqlclient-dev --no-install-recommends && \
+  apt-get clean && \
+  gem update --system && gem install bundler && \
+  rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN mkdir /build
+WORKDIR /build
+
+
 WORKDIR /app
+ADD Gemfile /app
+ADD Gemfile.lock /app
+RUN gem install bundler:2.1.4; bundle install --without=development
 
-COPY package*.json .npmrc /app/
+RUN mkdir -p ./shared/pids/ && \
+    mkdir -p ./shared/log/ && \
+    mkdir -p ./shared/sockets/ && \
+    chmod -R 666 ./shared/
 
-# Setup git
-ARG GIT_SSH_KEY
-RUN mkdir /root/.ssh/
-RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
-RUN chmod 0400 /root/.ssh/id_rsa
-RUN touch /root/.ssh/known_hosts
-RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
-
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-
-COPY package.json package-lock.json /app/
-RUN npm ci --production
 COPY . /app/
-
-FROM node:15-alpine
-RUN apk add make
-
-COPY --from=build /app /app
-
-WORKDIR /app
-
-CMD ["make", "server"]
