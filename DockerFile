@@ -1,109 +1,53 @@
-FROM ubuntu:trusty-20190515 as base
+FROM ruby:2.6.2-slim
 
-ARG ENVIRONMENT=staging
-ENV RAILS_ENV=${ENVIRONMENT}
+ENV DEBIAN_FRONTEND noninteractive
+# https://github.com/debuerreotype/docker-debian-artifacts/issues/66#issuecomment-476616579
+RUN sed -i '/jessie-updates/d' /etc/apt/sources.list  # Now archived
 
-ARG DEBUG_ASSETS=false
-ENV DEBUG_ASSETS=${DEBUG_ASSETS}}
+# mkdir due to: https://github.com/dalibo/temboard/commit/ff98d6740ae11345658508b02052294d6cffd448
+RUN apt-get update -q && \
+    mkdir -p /usr/share/man/man1 && \
+    mkdir -p /usr/share/man/man7 && \
+    apt-get -y install postgresql postgresql-contrib libpq-dev && \
+    apt-get install -y unixodbc-dev unixodbc default-libmysqlclient-dev build-essential libcurl4-openssl-dev curl python \
+    libssl-dev php7.0 php7.0-mcrypt python-pip
 
-ENV DEBIAN_FRONTEND=noninteractive
-ARG RUBY_VERSION=2.4
-ENV RUBY_VERSION=${RUBY_VERSION}
+RUN pip install -U niet
 
-ENV GEM_HOME /usr/local/bundle
-ENV BUNDLE_PATH="$GEM_HOME" \
-  BUNDLE_SILENCE_ROOT_WARNING=1 \
-  BUNDLE_APP_CONFIG="$GEM_HOME"
+# Install gcloud
+RUN curl https://dl.google.com/dl/cloudsdk/release/google-cloud-sdk.tar.gz > /tmp/google-cloud-sdk.tar.gz
+RUN curl https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem > /tmp/rds-combined-ca-bundle.pem
 
-ENV PATH $PATH:${GEM_HOME}/bin
+RUN mkdir -p /usr/local/gcloud \
+  && tar -C /usr/local/gcloud -xvf /tmp/google-cloud-sdk.tar.gz \
+  && /usr/local/gcloud/google-cloud-sdk/install.sh
 
-RUN echo "deb http://deb.nodesource.com/node_14.x trusty main\ndeb-src http://deb.nodesource.com/node_14.x trusty main" > /etc/apt/sources.list.d/nodesource.list
-RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
-  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
-  apt-get update -q && apt-get install --force-yes -yq --no-install-recommends ca-certificates curl \
-  fontconfig \
-  libjpeg-turbo8 \
-  libxrender1 \
-  nodejs \
-  openssl \
-  ruby$RUBY_VERSION \
-  wget \
-  imagemagick \
-  unixodbc \
-  unixodbc-dev \
-  libmysqlclient-dev \
-  xfonts-75dpi \
-  xfonts-base \
-  xvfb \
-  mysql-client && \
-  # clean up
-  rm -rf /var/lib/apt/lists/* && \
-  truncate -s 0 /var/log/*log && \
-  # Setup Rubygems
-  echo 'gem: --no-document' > /etc/gemrc && \
-  gem install bundler -v '<2' && gem update --system && \
-  wget https://s3.amazonaws.com/lmnd-tools/wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
-  dpkg -i wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
-  rm wkhtmltox-0.12.2.1_linux-trusty-amd64.deb
+ENV PATH $PATH:/usr/local/gcloud/google-cloud-sdk/bin
 
-RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
-  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
-  apt-get update -q && apt-get install -yq --no-install-recommends \
-  python-pip \
-  libssl-dev \
-  g++ \
-  gcc \
-  git \
-  libc6-dev \
-  make \
-  patch \
-  openssh-client \
-  ruby$RUBY_VERSION-dev && \
-  # clean up
-  rm -rf /var/lib/apt/lists/* && \
-  truncate -s 0 /var/log/*log
-
-RUN pip install awscli
-
-ADD Gemfile* /app/
-
-WORKDIR /app
-
-RUN bundle install -j3 --without development test && \
-  rm -rf ${GEM_HOME}/cache/*.gem && \
-  find ${GEM_HOME} -name "*.c" -delete && \
-  find ${GEM_HOME} -name "*.o" -delete && \
-  find ${GEM_HOME} -name "*_x86" -delete
-
-# snowflake driver
-RUN mkdir /build
 WORKDIR /build
 
-COPY snowflake-odbc-2.17.6.x86_64.deb ./
-RUN dpkg -i snowflake-odbc-2.17.6.x86_64.deb
+COPY snowflake-odbc-2.22.5.x86_64.deb ./
+RUN dpkg -i snowflake-odbc-2.22.5.x86_64.deb
 
 RUN sed -i 's/SF_ACCOUNT/tq01613.us-east-1/' /etc/odbc.ini
 
+RUN mkdir /app
 WORKDIR /app
 
-FROM base AS build
+COPY Gemfile Gemfile.lock ./
+RUN gem install bundler:2.0.2; bundle install --without=development
 
-ADD . /app
-WORKDIR /app
-# Setup git
-ARG GIT_SSH_KEY
-RUN mkdir /root/.ssh/
-RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
-RUN chmod 0400 /root/.ssh/id_rsa
-RUN touch /root/.ssh/known_hosts
-RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+COPY . /app
+RUN curl https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem > rds-combined-ca-bundle.pem
 
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> react/.npmrc
+ARG ENVIRONMENT=staging
+ENV STAGE=$ENVIRONMENT
+ENV ENVIRONMENT=$ENVIRONMENT
+ENV CONF_DIR=/app/conf
+RUN ln -sf /app/config/$ENVIRONMENT $CONF_DIR
+ENV GOOGLE_APPLICATION_CREDENTIALS=$CONF_DIR/bigquery.json
+ENV BOTO_CONFIG=$CONF_DIR/boto
 
-RUN rake assets:precompile && \
-  rm -rf tmp/* react/node_modules
+RUN gcloud config set project `niet $STAGE.project_id /app/config/bigquery.yml`
 
-FROM base
-COPY --from=build /app/public/assets /app/public/assets
-COPY --from=build /usr/local/bundle /usr/local/bundle
+CMD ["bundle", "exec", "rackup", "--host", "0.0.0.0", "-p", "2600"]
