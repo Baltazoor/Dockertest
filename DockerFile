@@ -1,54 +1,109 @@
-FROM python:3.9
-LABEL mantainer="Josip Janzic <josip@jjanzic.com>"
+FROM ubuntu:trusty-20190515 as base
 
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get install -y \
-        build-essential \
-        cmake \
-        git \
-        wget \
-        unzip \
-        yasm \
-        pkg-config \
-        libswscale-dev \
-        libtbb2 \
-        libtbb-dev \
-        libjpeg-dev \
-        libpng-dev \
-        libtiff-dev \
-        libavformat-dev \
-        libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+ARG ENVIRONMENT=staging
+ENV RAILS_ENV=${ENVIRONMENT}
 
-RUN pip install numpy
+ARG DEBUG_ASSETS=false
+ENV DEBUG_ASSETS=${DEBUG_ASSETS}}
 
-WORKDIR /
-ENV OPENCV_VERSION="4.5.0"
-RUN wget https://github.com/opencv/opencv/archive/${OPENCV_VERSION}.zip \
-&& unzip ${OPENCV_VERSION}.zip \
-&& mkdir /opencv-${OPENCV_VERSION}/cmake_binary \
-&& cd /opencv-${OPENCV_VERSION}/cmake_binary \
-&& cmake -DBUILD_TIFF=ON \
-  -DBUILD_opencv_java=OFF \
-  -DWITH_CUDA=OFF \
-  -DWITH_OPENGL=ON \
-  -DWITH_OPENCL=ON \
-  -DWITH_IPP=ON \
-  -DWITH_TBB=ON \
-  -DWITH_EIGEN=ON \
-  -DWITH_V4L=ON \
-  -DBUILD_TESTS=OFF \
-  -DBUILD_PERF_TESTS=OFF \
-  -DCMAKE_BUILD_TYPE=RELEASE \
-  -DCMAKE_INSTALL_PREFIX=$(python3.9 -c "import sys; print(sys.prefix)") \
-  -DPYTHON_EXECUTABLE=$(which python3.9) \
-  -DPYTHON_INCLUDE_DIR=$(python3.9 -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())") \
-  -DPYTHON_PACKAGES_PATH=$(python3.9 -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())") \
-  .. \
-&& make install \
-&& rm /${OPENCV_VERSION}.zip \
-&& rm -r /opencv-${OPENCV_VERSION}
-RUN ln -s \
-  /usr/local/python/cv2/python-3.9/cv2.cpython-37m-x86_64-linux-gnu.so \
-  /usr/local/lib/python3.9/site-packages/cv2.so
+ENV DEBIAN_FRONTEND=noninteractive
+ARG RUBY_VERSION=2.4
+ENV RUBY_VERSION=${RUBY_VERSION}
+
+ENV GEM_HOME /usr/local/bundle
+ENV BUNDLE_PATH="$GEM_HOME" \
+  BUNDLE_SILENCE_ROOT_WARNING=1 \
+  BUNDLE_APP_CONFIG="$GEM_HOME"
+
+ENV PATH $PATH:${GEM_HOME}/bin
+
+RUN echo "deb http://deb.nodesource.com/node_14.x trusty main\ndeb-src http://deb.nodesource.com/node_14.x trusty main" > /etc/apt/sources.list.d/nodesource.list
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
+  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
+  apt-get update -q && apt-get install --force-yes -yq --no-install-recommends ca-certificates curl \
+  fontconfig \
+  libjpeg-turbo8 \
+  libxrender1 \
+  nodejs \
+  openssl \
+  ruby$RUBY_VERSION \
+  wget \
+  imagemagick \
+  unixodbc \
+  unixodbc-dev \
+  libmysqlclient-dev \
+  xfonts-75dpi \
+  xfonts-base \
+  xvfb \
+  mysql-client && \
+  # clean up
+  rm -rf /var/lib/apt/lists/* && \
+  truncate -s 0 /var/log/*log && \
+  # Setup Rubygems
+  echo 'gem: --no-document' > /etc/gemrc && \
+  gem install bundler -v '<2' && gem update --system && \
+  wget https://s3.amazonaws.com/lmnd-tools/wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
+  dpkg -i wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
+  rm wkhtmltox-0.12.2.1_linux-trusty-amd64.deb
+
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
+  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
+  apt-get update -q && apt-get install -yq --no-install-recommends \
+  python-pip \
+  libssl-dev \
+  g++ \
+  gcc \
+  git \
+  libc6-dev \
+  make \
+  patch \
+  openssh-client \
+  ruby$RUBY_VERSION-dev && \
+  # clean up
+  rm -rf /var/lib/apt/lists/* && \
+  truncate -s 0 /var/log/*log
+
+RUN pip install awscli
+
+ADD Gemfile* /app/
+
+WORKDIR /app
+
+RUN bundle install -j3 --without development test && \
+  rm -rf ${GEM_HOME}/cache/*.gem && \
+  find ${GEM_HOME} -name "*.c" -delete && \
+  find ${GEM_HOME} -name "*.o" -delete && \
+  find ${GEM_HOME} -name "*_x86" -delete
+
+# snowflake driver
+RUN mkdir /build
+WORKDIR /build
+
+COPY snowflake-odbc-2.17.6.x86_64.deb ./
+RUN dpkg -i snowflake-odbc-2.17.6.x86_64.deb
+
+RUN sed -i 's/SF_ACCOUNT/tq01613.us-east-1/' /etc/odbc.ini
+
+WORKDIR /app
+
+FROM base AS build
+
+ADD . /app
+WORKDIR /app
+# Setup git
+ARG GIT_SSH_KEY
+RUN mkdir /root/.ssh/
+RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
+RUN chmod 0400 /root/.ssh/id_rsa
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+ARG GITHUB_NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> react/.npmrc
+
+RUN rake assets:precompile && \
+  rm -rf tmp/* react/node_modules
+
+FROM base
+COPY --from=build /app/public/assets /app/public/assets
+COPY --from=build /usr/local/bundle /usr/local/bundle
