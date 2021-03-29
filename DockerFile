@@ -11,7 +11,7 @@ RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
 
 RUN npm i
 
-FROM node:latest
+FROM node:14.16-alpine
 
 COPY --from=build /app /app
 COPY . /app/
