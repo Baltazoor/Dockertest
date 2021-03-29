@@ -1,29 +1,21 @@
-FROM ruby:2
+FROM node:10.11-alpine AS build
+RUN apk add git python make
+RUN mkdir /app
+WORKDIR /app
 
-ARG ENVIRONMENT=staging
-ENV RAILS_ENV=${ENVIRONMENT}
+COPY package*.json .npmrc /app/
 
-ENV DEBIAN_FRONTEND noninteractive
+# Setup NPM
+ARG GITHUB_NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
 
-RUN apt-get update && \
-  apt-get install -y curl && \
-  apt-get install -y mysql-server mysql-client unixodbc unixodbc-dev default-libmysqlclient-dev --no-install-recommends && \
-  apt-get clean && \
-  gem update --system && gem install bundler && \
-  rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+RUN npm i
 
-RUN mkdir /build
-WORKDIR /build
+FROM node:latest
 
+COPY --from=build /app /app
+COPY . /app/
 
 WORKDIR /app
-ADD Gemfile /app
-ADD Gemfile.lock /app
-RUN gem install bundler:2.1.4; bundle install --without=development
 
-RUN mkdir -p ./shared/pids/ && \
-    mkdir -p ./shared/log/ && \
-    mkdir -p ./shared/sockets/ && \
-    chmod -R 666 ./shared/
-
-COPY . /app/
+CMD ["npm", "run", "storybook", "--", "--ci"]
