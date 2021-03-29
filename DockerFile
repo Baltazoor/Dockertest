@@ -1,21 +1,8 @@
-FROM node:10.11-alpine AS build
-RUN apk add git python make
-RUN mkdir /app
-WORKDIR /app
+FROM apache/airflow:1.10.11-python3.7
 
-COPY package*.json .npmrc /app/
+COPY requirements.txt /requirements.txt
+RUN pip install -r /requirements.txt --user
 
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-
-RUN npm i
-
-FROM node:14.16-alpine
-
-COPY --from=build /app /app
-COPY . /app/
-
-WORKDIR /app
-
-CMD ["npm", "run", "storybook", "--", "--ci"]
+COPY dags /opt/airflow/dags
+COPY utils /opt/airflow/utils
+COPY config /opt/airflow/config
