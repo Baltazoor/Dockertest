@@ -1,4 +1,4 @@
-FROM ruby:2.6.2-slim
+FROM ruby:2.6-slim
 
 ENV DEBIAN_FRONTEND noninteractive
 # https://github.com/debuerreotype/docker-debian-artifacts/issues/66#issuecomment-476616579
