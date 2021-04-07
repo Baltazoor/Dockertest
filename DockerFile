@@ -35,6 +35,7 @@ RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 &
   xfonts-75dpi \
   xfonts-base \
   xvfb \
+  sudo \
   mysql-client && \
   # clean up
   rm -rf /var/lib/apt/lists/* && \
