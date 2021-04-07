@@ -1,33 +1,109 @@
-FROM ruby:2.6.5
+FROM ubuntu:trusty-20190515 as base
 
-ENV DEBIAN_FRONTEND noninteractive
+ARG ENVIRONMENT=staging
+ENV RAILS_ENV=${ENVIRONMENT}
 
-# https://github.com/debuerreotype/docker-debian-artifacts/issues/66#issuecomment-476616579
-RUN sed -i '/jessie-updates/d' /etc/apt/sources.list  # Now archived
+ARG DEBUG_ASSETS=false
+ENV DEBUG_ASSETS=${DEBUG_ASSETS}}
 
-RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
-  apt-get update && \
-  apt-get install -y default-mysql-server default-mysql-client default-libmysqlclient-dev --no-install-recommends unixodbc unixodbc-dev && \
-  apt-get clean
+ENV DEBIAN_FRONTEND=noninteractive
+ARG RUBY_VERSION=2.4
+ENV RUBY_VERSION=${RUBY_VERSION}
+
+ENV GEM_HOME /usr/local/bundle
+ENV BUNDLE_PATH="$GEM_HOME" \
+  BUNDLE_SILENCE_ROOT_WARNING=1 \
+  BUNDLE_APP_CONFIG="$GEM_HOME"
+
+ENV PATH $PATH:${GEM_HOME}/bin
+
+RUN echo "deb http://deb.nodesource.com/node_14.x trusty main\ndeb-src http://deb.nodesource.com/node_14.x trusty main" > /etc/apt/sources.list.d/nodesource.list
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
+  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
+  apt-get update -q && apt-get install --force-yes -yq --no-install-recommends ca-certificates curl \
+  fontconfig \
+  libjpeg-turbo8 \
+  libxrender1 \
+  nodejs \
+  openssl \
+  ruby$RUBY_VERSION \
+  wget \
+  imagemagick \
+  unixodbc \
+  unixodbc-dev \
+  libmysqlclient-dev \
+  xfonts-75dpi \
+  xfonts-base \
+  xvfb \
+  mysql-client && \
+  # clean up
+  rm -rf /var/lib/apt/lists/* && \
+  truncate -s 0 /var/log/*log && \
+  # Setup Rubygems
+  echo 'gem: --no-document' > /etc/gemrc && \
+  gem install bundler -v '<2' && gem update --system && \
+  wget https://s3.amazonaws.com/lmnd-tools/wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
+  dpkg -i wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
+  rm wkhtmltox-0.12.2.1_linux-trusty-amd64.deb
+
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
+  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
+  apt-get update -q && apt-get install -yq --no-install-recommends \
+  python-pip \
+  libssl-dev \
+  g++ \
+  gcc \
+  git \
+  libc6-dev \
+  make \
+  patch \
+  openssh-client \
+  ruby$RUBY_VERSION-dev && \
+  # clean up
+  rm -rf /var/lib/apt/lists/* && \
+  truncate -s 0 /var/log/*log
+
+RUN pip install awscli
+
+ADD Gemfile* /app/
+
+WORKDIR /app
+
+RUN bundle install -j3 --without development test && \
+  rm -rf ${GEM_HOME}/cache/*.gem && \
+  find ${GEM_HOME} -name "*.c" -delete && \
+  find ${GEM_HOME} -name "*.o" -delete && \
+  find ${GEM_HOME} -name "*_x86" -delete
+
+# snowflake driver
+RUN mkdir /build
+WORKDIR /build
 
 COPY snowflake-odbc-2.17.6.x86_64.deb ./
 RUN dpkg -i snowflake-odbc-2.17.6.x86_64.deb
+
 RUN sed -i 's/SF_ACCOUNT/tq01613.us-east-1/' /etc/odbc.ini
 
 WORKDIR /app
-RUN mkdir -p ./shared/pids/ && \
-    mkdir -p ./shared/log/ && \
-    mkdir -p ./shared/sockets/ && \
-    chmod -R 666 ./shared/
-COPY . /app/
 
-RUN bundle && \
-  rake rails:update:bin && \
-  rm -f tmp/pids/server.pid
+FROM base AS build
 
-RUN ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stderr.log && \
-    ln -sf /proc/1/fd/1 /app/shared/log/unicorn.stdout.log
+ADD . /app
+WORKDIR /app
+# Setup git
+ARG GIT_SSH_KEY
+RUN mkdir /root/.ssh/
+RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
+RUN chmod 0400 /root/.ssh/id_rsa
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-COPY infra/docker/docker-entrypoint.sh /
+ARG GITHUB_NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> react/.npmrc
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+RUN rake assets:precompile && \
+  rm -rf tmp/* react/node_modules
+
+FROM base
+COPY --from=build /app/public/assets /app/public/assets
+COPY --from=build /usr/local/bundle /usr/local/bundle
