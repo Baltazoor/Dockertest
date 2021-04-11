@@ -1,96 +1,10 @@
-FROM ubuntu:trusty-20190515 as base
-
-ARG ENVIRONMENT=staging
-ENV RAILS_ENV=${ENVIRONMENT}
-
-ARG DEBUG_ASSETS=false
-ENV DEBUG_ASSETS=${DEBUG_ASSETS}}
-
-ENV DEBIAN_FRONTEND=noninteractive
-ARG RUBY_VERSION=2.4
-ENV RUBY_VERSION=${RUBY_VERSION}
-
-ENV GEM_HOME /usr/local/bundle
-ENV BUNDLE_PATH="$GEM_HOME" \
-  BUNDLE_SILENCE_ROOT_WARNING=1 \
-  BUNDLE_APP_CONFIG="$GEM_HOME"
-
-ENV PATH $PATH:${GEM_HOME}/bin
-
-RUN echo "deb http://deb.nodesource.com/node_14.x trusty main\ndeb-src http://deb.nodesource.com/node_14.x trusty main" > /etc/apt/sources.list.d/nodesource.list
-RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
-  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
-  apt-get update -q && apt-get install --force-yes -yq --no-install-recommends ca-certificates curl \
-  fontconfig \
-  libjpeg-turbo8 \
-  libxrender1 \
-  nodejs \
-  openssl \
-  ruby$RUBY_VERSION \
-  wget \
-  imagemagick \
-  unixodbc \
-  unixodbc-dev \
-  libmysqlclient-dev \
-  xfonts-75dpi \
-  xfonts-base \
-  xvfb \
-  sudo \
-  mysql-client && \
-  # clean up
-  rm -rf /var/lib/apt/lists/* && \
-  truncate -s 0 /var/log/*log && \
-  # Setup Rubygems
-  echo 'gem: --no-document' > /etc/gemrc && \
-  gem install bundler -v '<2' && gem update --system && \
-  wget https://s3.amazonaws.com/lmnd-tools/wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
-  dpkg -i wkhtmltox-0.12.2.1_linux-trusty-amd64.deb && \
-  rm wkhtmltox-0.12.2.1_linux-trusty-amd64.deb
-
-RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C3173AA6 && \
-  echo deb http://ppa.launchpad.net/brightbox/ruby-ng/ubuntu trusty main > /etc/apt/sources.list.d/brightbox-ruby-ng-trusty.list && \
-  apt-get update -q && apt-get install -yq --no-install-recommends \
-  python-pip \
-  libssl-dev \
-  g++ \
-  gcc \
-  git \
-  libc6-dev \
-  make \
-  patch \
-  openssh-client \
-  ruby$RUBY_VERSION-dev && \
-  # clean up
-  rm -rf /var/lib/apt/lists/* && \
-  truncate -s 0 /var/log/*log
-
-RUN pip install awscli
-
-ADD Gemfile* /app/
-
+FROM node:14.4-alpine AS build
+RUN apk --no-cache add git openssh-client python make g++
+RUN mkdir /app
 WORKDIR /app
 
-RUN bundle install -j3 --without development test && \
-  rm -rf ${GEM_HOME}/cache/*.gem && \
-  find ${GEM_HOME} -name "*.c" -delete && \
-  find ${GEM_HOME} -name "*.o" -delete && \
-  find ${GEM_HOME} -name "*_x86" -delete
+COPY package*.json .npmrc /app/
 
-# snowflake driver
-RUN mkdir /build
-WORKDIR /build
-
-COPY snowflake-odbc-2.17.6.x86_64.deb ./
-RUN dpkg -i snowflake-odbc-2.17.6.x86_64.deb
-
-RUN sed -i 's/SF_ACCOUNT/tq01613.us-east-1/' /etc/odbc.ini
-
-WORKDIR /app
-
-FROM base AS build
-
-ADD . /app
-WORKDIR /app
 # Setup git
 ARG GIT_SSH_KEY
 RUN mkdir /root/.ssh/
@@ -99,12 +13,20 @@ RUN chmod 0400 /root/.ssh/id_rsa
 RUN touch /root/.ssh/known_hosts
 RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
 
+# Setup NPM
 ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> react/.npmrc
+RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
+RUN cat .npmrc
 
-RUN rake assets:precompile && \
-  rm -rf tmp/* react/node_modules
+COPY package.json package-lock.json /app/
+RUN npm ci --production
+COPY . /app/
 
-FROM base
-COPY --from=build /app/public/assets /app/public/assets
-COPY --from=build /usr/local/bundle /usr/local/bundle
+FROM node:14.4-alpine
+RUN apk add make
+
+COPY --from=build /app /app
+
+WORKDIR /app
+
+CMD ["make", "server"]
