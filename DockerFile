@@ -1,32 +1,24 @@
-FROM node:14.4-alpine AS build
-RUN apk --no-cache add git openssh-client python make g++
-RUN mkdir /app
-WORKDIR /app
+FROM python:3.7
 
-COPY package*.json .npmrc /app/
+LABEL maintainer="Sebastian Ramirez <tiangolo@gmail.com>"
 
-# Setup git
-ARG GIT_SSH_KEY
-RUN mkdir /root/.ssh/
-RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
-RUN chmod 0400 /root/.ssh/id_rsa
-RUN touch /root/.ssh/known_hosts
-RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+RUN pip install --no-cache-dir "uvicorn[standard]" gunicorn
 
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-RUN cat .npmrc
+COPY ./start.sh /start.sh
+RUN chmod +x /start.sh
 
-COPY package.json package-lock.json /app/
-RUN npm ci --production
-COPY . /app/
+COPY ./gunicorn_conf.py /gunicorn_conf.py
 
-FROM node:14.4-alpine
-RUN apk add make
+COPY ./start-reload.sh /start-reload.sh
+RUN chmod +x /start-reload.sh
 
-COPY --from=build /app /app
+COPY ./app /app
+WORKDIR /app/
 
-WORKDIR /app
+ENV PYTHONPATH=/app
 
-CMD ["make", "server"]
+EXPOSE 80
+
+# Run the start script, it will check for an /app/prestart.sh script (e.g. for migrations)
+# And then will start Gunicorn with Uvicorn
+CMD ["/start.sh"]
