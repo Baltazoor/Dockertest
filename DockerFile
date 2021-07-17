@@ -1,4 +1,4 @@
-FROM node:10.11-alpine AS build
+FROM node:10.23-alpine AS build
 RUN apk add git python make
 RUN mkdir /app
 WORKDIR /app
@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package*.json /app/
 RUN npm i
 
-FROM node:10.11-alpine
+FROM node:10.23-alpine
 
 COPY --from=build /app /app
 COPY . /app/
