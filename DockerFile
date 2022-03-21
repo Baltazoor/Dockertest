@@ -1,36 +1,55 @@
-FROM node:14-alpine
-RUN apk --no-cache add git openssh-client python3 make g++
-RUN ln -s /usr/bin/python3 /usr/bin/python
-RUN mkdir /app
-WORKDIR /app
+FROM python:3.9
 
-COPY package*.json .npmrc /app/
+LABEL mantainer="Josip Janzic <josip@jjanzic.com>"
 
-ARG ENVIRONMENT=staging
-ENV STAGE=${ENVIRONMENT}
+WORKDIR /opt/build
 
-ARG ENV_ID=master
-ENV ENV_ID=${ENV_ID}
-ARG GIT_COMMIT=unknown
-ENV GIT_COMMIT=${GIT_COMMIT}
-ARG SENTRY_TOKEN=unknown
-ENV SENTRY_TOKEN=${SENTRY_TOKEN}
+ENV OPENCV_VERSION="4.5.1"
 
-# Setup git
-ARG GIT_SSH_KEY
-RUN mkdir /root/.ssh/
-RUN echo "${GIT_SSH_KEY}" > /root/.ssh/id_rsa
-RUN chmod 0400 /root/.ssh/id_rsa
-RUN touch /root/.ssh/known_hosts
-RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
-
-# Setup NPM
-ARG GITHUB_NPM_TOKEN
-RUN echo "//npm.pkg.github.com/:_authToken=${GITHUB_NPM_TOKEN}" >> .npmrc
-
-# Build
-RUN npm i
-COPY . /app/
-RUN npm run build:release
-
-CMD ["make", "dev-server"]
+RUN apt-get -qq update \
+    && apt-get -qq install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        git \
+        wget \
+        unzip \
+        yasm \
+        pkg-config \
+        libswscale-dev \
+        libtbb2 \
+        libtbb-dev \
+        libjpeg-dev \
+        libpng-dev \
+        libtiff-dev \
+        libopenjp2-7-dev \
+        libavformat-dev \
+        libpq-dev \
+    && pip install numpy \
+    && wget -q https://github.com/opencv/opencv/archive/${OPENCV_VERSION}.zip -O opencv.zip \
+    && unzip -qq opencv.zip -d /opt \
+    && rm -rf opencv.zip \
+    && cmake \
+        -D BUILD_TIFF=ON \
+        -D BUILD_opencv_java=OFF \
+        -D WITH_CUDA=OFF \
+        -D WITH_OPENGL=ON \
+        -D WITH_OPENCL=ON \
+        -D WITH_IPP=ON \
+        -D WITH_TBB=ON \
+        -D WITH_EIGEN=ON \
+        -D WITH_V4L=ON \
+        -D BUILD_TESTS=OFF \
+        -D BUILD_PERF_TESTS=OFF \
+        -D CMAKE_BUILD_TYPE=RELEASE \
+        -D CMAKE_INSTALL_PREFIX=$(python3.9 -c "import sys; print(sys.prefix)") \
+        -D PYTHON_EXECUTABLE=$(which python3.9) \
+        -D PYTHON_INCLUDE_DIR=$(python3.9 -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())") \
+        -D PYTHON_PACKAGES_PATH=$(python3.9 -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())") \
+        /opt/opencv-${OPENCV_VERSION} \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /opt/build/* \
+    && rm -rf /opt/opencv-${OPENCV_VERSION} \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get -qq autoremove \
+    && apt-get -qq clean
